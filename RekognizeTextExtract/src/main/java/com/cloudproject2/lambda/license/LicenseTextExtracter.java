@@ -1,103 +1,239 @@
-package com.cloudproject2.lambda.license;
+import React, { Component } from "react";
+import { Auth } from "aws-amplify";
+import Row from "react-bootstrap/Row";
+import Nav from "./Navbar";
+import Chatbot from "./Chatbot";
+import axios from 'axios';
+import config from "../../src/config";
+import { Redirect } from "react-router-dom";
 
-import com.amazonaws.services.lambda.runtime.Context;
-import com.amazonaws.services.lambda.runtime.RequestHandler;
-import com.amazonaws.services.rekognition.AmazonRekognition;
-import com.amazonaws.services.rekognition.AmazonRekognitionClientBuilder;
-import com.amazonaws.services.rekognition.model.*;
 
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+const CURRENT_USER = 'currentUser'
 
-public class LicenseTextExtracter implements RequestHandler<GatewayRequest, GatewayResponse> {
 
-    // Regex Patterns
-    private static final String FIRST_NAME_PATTERN = "(FN|1)[ :]*([a-zA-Z ]+)";
-    private static final String LAST_NAME_PATTERN = "(LN|2)[ :]*([a-zA-Z ]+)";
-    private static final String DL_PATTERN = "(4d LIC NO|4d DLN|4d DL|LIC|DL|4D|dl|ID)[ :]+([\\w-]+)";
-    private static final String EXP_PATTERN = "(EXP|Exp|4b|4B).+?(\\d{2}[-\\/]\\d{2}[-\\/]\\d{4})";
+export default class RegisterLicense extends Component {
 
-    @Override
-    public GatewayResponse handleRequest(GatewayRequest request, Context context) {
-        System.out.println("Inside lambda + " + request.getFileName());
-        AmazonRekognition amazonRekognition = AmazonRekognitionClientBuilder.defaultClient();
-        UserLicense userlicense = new UserLicense();
-        DetectTextRequest detectTextRequest = new DetectTextRequest()
-                .withImage(new Image()
-                .withS3Object(new S3Object()
-                .withName(request.getFileName())
-                .withBucket("mssecarrental")));
+  constructor(props) {
+    super(props);
+    this.state = {
+      firstName: "",
+      lastName: "",
+      filesSelected: {},
+      showMaxSizeError: false,
+      fileSubmitted: false,
+      isLoading: false
+    };
+  }
 
-        try {
-            Pattern fnPattern = Pattern.compile(FIRST_NAME_PATTERN);
-            Pattern lnPattern = Pattern.compile(LAST_NAME_PATTERN);
-            Pattern dlPattern = Pattern.compile(DL_PATTERN);
-            Pattern expPattern = Pattern.compile(EXP_PATTERN);
 
-            DetectTextResult result = amazonRekognition.detectText(detectTextRequest);
-            List<TextDetection> textDetections = result.getTextDetections();
+  stopReloading = () => {
+    this.setState(() => ({
+      isLoading: false,
+    }));
+  }
 
-            for (int index = 0; index < textDetections.size() - 1; index++) {
+  myuploadFileToServer = (file) => {
+    console.log("Uploading file to server")
+    console.log(file.name)
+    var size = file.size / 1024 / 1024 // 2MB Limit
+    console.log("file size: " + size)
+    this.setState(() => ({
+      isLoading: true,
+    }));
+    if (size > 2) {
+      this.setState(() => ({
+        showMaxSizeError: true,
+      }));
+    } else { 
 
-                // Match Only LINES but not words
-                if (textDetections.get(index).getType().equalsIgnoreCase("LINE")) {
-                    String currentTextString = textDetections.get(index).getDetectedText();
+      var currentUser = localStorage.getItem(CURRENT_USER)
+      var formData = new FormData()
+      formData.append('username', currentUser)
+      formData.append('file', file)
 
-                    Matcher dlMatcher = dlPattern.matcher(currentTextString);
-                    if (dlMatcher.find()) {
-                        userlicense.setLicense(dlMatcher.group(2));
-                        continue;
-                    }
-
-                    Matcher expMatcher = expPattern.matcher(currentTextString);
-                    if (expMatcher.find()) {
-                        userlicense.setExpiryDate(convertToDate(expMatcher.group(2)));
-                        continue;
-                    }
-
-                    Matcher fnMatcher = fnPattern.matcher(currentTextString);
-                    if (fnMatcher.find()) {
-                        userlicense.setFirstname(fnMatcher.group(2));
-                        continue;
-                    }
-
-                    Matcher lnMatcher = lnPattern.matcher(currentTextString);
-                    if (lnMatcher.find()) {
-                        userlicense.setLastname(lnMatcher.group(2));
-                        continue;
-                    }
-
-                    if (userlicense.isComplete()) {
-                        break;
-                    }
-                }
-            }
-
-            // Success case return back 200
-            return new GatewayResponse()
-                    .setBody(userlicense)
-                    .setStatusCode(200);
-        } catch (AmazonRekognitionException e) {
-            e.printStackTrace();
+      const configure = {
+        headers: {
+          'content-type': 'multipart/form-data'
         }
+      }
 
-        // Error case 404
-        return new GatewayResponse()
-                .setStatusCode(404);
+      axios.post(config.BackendUrl + '/identifications', formData, configure)
+        .then(response1 => {
+          console.log(response1)
+          var id = response1.data.id
+          axios.post(config.BackendUrl + '/verification/check/' + id)
+            .then(response2 => {
+              if (response2.data.result == 'PASS') {
+                // newFormData.append('photo', response1.data.s3Key)
+                // newFormData.append('isBlacklisted',response1.data.blacklisted)
+                var apiGateWayUrl = "https://mnbpyxxh13.execute-api.us-east-1.amazonaws.com/dev/";
+                axios.get(apiGateWayUrl + 'driverlicense?fileName='+response1.data.s3Key)
+                  .then(response3 => {
+                    console.log("success " + JSON.stringify(response3.data))
+                    var {license, firstname, lastname, expiryDate} = response3.data.body
+                    console.log("Trigger save lic call") 
+                    var newFormData = new FormData()
+                    newFormData.append("firstName",firstname)
+                    newFormData.append("lastName",lastname)
+                    newFormData.append("license",license)
+                    newFormData.append("expiry",expiryDate)
+                    axios.post(config.BackendUrl + '/license', newFormData)
+                    .then(response4 => {
+                      console.log("final response : "+ JSON.stringify(response4))
+                      this.setState(() => ({
+                        fileSubmitted: true,
+                      }));
+                    })
+                    })
+                    .catch(error => {
+                      console.log(error)
+                    })
+                    .finally(() => {
+                      this.stopReloading()
+                    })
+                  .catch(error => {
+                    console.log(error)
+                  })
+                  .finally(() => {
+                    this.stopReloading()
+                  })
+              }
+              else {
+                this.stopReloading()
+                alert('Not allowed to book a car')
+              }
+            })
+            .catch(error => {
+              this.stopReloading()
+              alert('Not allowed to book a car')
+              console.log(error)
+            })
+      })
+        .catch(error => {
+          console.log(error)
+          if(error.response.status === 500) {
+            alert('Please upload a valid Driver License Image')
+          }
+          this.stopReloading()
+        })
     }
+  }
 
-    private Date convertToDate(String textString) {
-        SimpleDateFormat formatter = new SimpleDateFormat(textString.contains("/") ? "MM/dd/yyyy" : "MM-dd-yyyy");
-        try {
-            return formatter.parse(textString);
-        } catch (ParseException e) {
-            e.printStackTrace();
+  onFileSubmit = (e) => {
+    var file = this.state.filesSelected
+    console.log("onFile Submitted :" + file)
+    this.myuploadFileToServer(file)
+
+  }
+
+  fileDropped = (e) => {
+    console.log("onFile onDropped" + e)
+    var file = e.target.files[0];
+    console.log("onFile onDropped image" + file)
+    this.setState(() => ({
+      filesSelected: file,
+    }));
+  }
+
+  render() {
+    var { isLoading } = this.state;
+    console.log("register license render :" + this.state.fileSubmitted)
+    if (this.state.fileSubmitted) {
+     return (
+        <div>
+         <Nav />
+          <React.Fragment>
+             <h2>	
+              {this.state.firstName}	
+            </h2>	
+            <div className="Card">	
+              <p>Your Driver License is verified. Please go ahead and rent a car</p>	
+            </div>	
+          </React.Fragment>	
+          <Chatbot />	
+        </div>
+       )
+         }
+    
+    
+    else {
+      return (
+
+        <div>
+          <Nav />
+          <React.Fragment>
+            <br />
+            <br />
+            <Row className="justify-content-md-center">
+              <br />
+              <br />
+              <h2>
+                Hello  {this.state.firstName} , Please upload a valid license, before you proceed to book/rent a car
+          </h2>
+            </Row>
+            <br />
+            <br />
+            <br />
+            <Row className="justify-content-md-center">
+              <div className="Card">
+                <div id="filesubmit">
+                  <input type="file" className="file-select" accept="image/*" onChange={this.fileDropped} />
+
+                  <button className="file-submit"
+                    onClick={this.onFileSubmit} disabled={isLoading} >
+                    {isLoading && (
+                      <i
+                        className="fa fa-refresh fa-spin"
+                        style={{ marginRight: "5px" }}
+                      />
+                    )}
+                    {isLoading && <span>Please Wait</span>}
+                    {!isLoading && <span>UPLOAD LICENSE</span>}
+                  </button>
+
+                </div>
+              </div>
+            </Row>
+          </React.Fragment>
+          <Chatbot />
+        </div>
+      )
+
+    }
+  }
+
+  getUserData() {
+    Auth.currentAuthenticatedUser()
+      .then(data => {
+        const { username, attributes } = data;
+        const { name, family_name } = attributes
+        console.log(username)
+        console.log(name)
+
+        var registeredUser = data.getUsername() + '_registered'
+        localStorage.setItem(CURRENT_USER, data.getUsername())
+
+        this.setState(prevState => ({
+          firstName: name,
+          lastName: family_name
+        }));
+
+        if (!localStorage.getItem(registeredUser)) {
+          console.log("no key in local storage for user " + registeredUser)
+          var userData = new Object();
+          userData.username = data.getUsername()
+          userData.firstname = name
+          userData.lastname = family_name
+          this.signInUser(userData)
         }
-        return null;
-    }
+      })
+      .catch(err => { console.log(err) })
+  }
+
+  componentDidMount() {
+    console.log("component did mount : " + localStorage.getItem('amplify-authenticator-authState'))
+    this.getUserData();
+  }
+
 
 }
