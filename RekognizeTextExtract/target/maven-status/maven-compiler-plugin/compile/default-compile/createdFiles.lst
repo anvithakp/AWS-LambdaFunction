@@ -1,0 +1,4 @@
+com\cloudproject2\lambda\license\LicenseTextExtracter.class
+com\cloudproject2\lambda\license\GatewayRequest.class
+com\cloudproject2\lambda\license\GatewayResponse.class
+com\cloudproject2\lambda\license\UserLicense.class
